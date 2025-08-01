@@ -94,7 +94,7 @@ Resources:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${LambdaFunction}:*'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-log-replicator:*'
 
   # Lambda Function
   LambdaFunction:
@@ -216,7 +216,7 @@ Resources:
   LambdaLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub '/aws/lambda/${LambdaFunction}'
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-log-replicator'
       RetentionInDays: !Ref LogRetentionDays
 
   # SQS Event Source Mapping
@@ -244,7 +244,7 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       Dimensions:
         - Name: FunctionName
-          Value: !Ref LambdaFunction
+          Value: !Sub '${AWS::StackName}-log-replicator'
       AlarmActions:
         - !Ref SNSTopic
 
@@ -262,7 +262,7 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       Dimensions:
         - Name: FunctionName
-          Value: !Ref LambdaFunction
+          Value: !Sub '${AWS::StackName}-log-replicator'
       AlarmActions:
         - !Ref SNSTopic
 
@@ -304,7 +304,7 @@ Resources:
               "height": 6,
               "properties": {
                 "metrics": [
-                  ["AWS/Lambda", "Invocations", "FunctionName", "${LambdaFunction}"],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${AWS::StackName}-log-replicator"],
                   [".", "Errors", ".", "."],
                   [".", "Throttles", ".", "."]
                 ],
@@ -322,7 +322,7 @@ Resources:
               "height": 6,
               "properties": {
                 "metrics": [
-                  ["AWS/Lambda", "Duration", "FunctionName", "${LambdaFunction}"]
+                  ["AWS/Lambda", "Duration", "FunctionName", "${AWS::StackName}-log-replicator"]
                 ],
                 "view": "timeSeries",
                 "stacked": false,
