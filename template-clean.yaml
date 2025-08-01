@@ -35,50 +35,17 @@ Parameters:
     Default: 'dev'
     Description: 'Environment name (dev, staging, prod)'
     AllowedValues: ['dev', 'staging', 'prod']
+  
+  ExistingIAMRoleARN:
+    Type: String
+    Description: 'ARN of existing IAM role to use for Lambda execution'
+    AllowedPattern: '^arn:aws:iam::[0-9]{12}:role/[a-zA-Z0-9-_]+$'
 
 Conditions:
   IsProd: !Equals [!Ref Environment, 'prod']
 
 Resources:
-  # Lambda Execution Role
-  LambdaExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${AWS::StackName}-lambda-execution-role'
-      AssumeRolePolicy:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: S3AccessPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:GetObjectVersion
-                Resource: !Sub 'arn:aws:s3:::${VendorS3BucketName}/*'
-              - Effect: Allow
-                Action:
-                  - s3:PutObject
-                  - s3:PutObjectAcl
-                Resource: !Sub 'arn:aws:s3:::${DestinationS3BucketName}/*'
-        - PolicyName: CrossAccountSQSPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource: !Ref VendorSQSQueueARN
+  # Use existing IAM role (no resource creation needed)
 
 
   # Lambda Function
@@ -88,7 +55,7 @@ Resources:
       FunctionName: !Sub '${AWS::StackName}-log-replicator'
       Runtime: python3.9
       Handler: index.lambda_handler
-      Role: !GetAtt LambdaExecutionRole.Arn
+      Role: !Ref ExistingIAMRoleARN
       Timeout: !Ref LambdaTimeout
       MemorySize: !Ref LambdaMemorySize
       Environment:
@@ -230,7 +197,7 @@ Outputs:
 
   LambdaExecutionRoleARN:
     Description: 'ARN of the Lambda execution role'
-    Value: !GetAtt LambdaExecutionRole.Arn
+    Value: !Ref ExistingIAMRoleARN
     Export:
       Name: !Sub '${AWS::StackName}-lambda-execution-role-arn'
 
