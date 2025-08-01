@@ -30,12 +30,6 @@ Parameters:
     Description: 'Lambda function memory size in MB'
     AllowedValues: [128, 256, 512, 1024, 2048, 3008]
   
-  LogRetentionDays:
-    Type: Number
-    Default: 30
-    Description: 'Number of days to retain CloudWatch logs'
-    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
-  
   Environment:
     Type: String
     Default: 'dev'
@@ -85,16 +79,7 @@ Resources:
                   - sqs:DeleteMessage
                   - sqs:GetQueueAttributes
                 Resource: !Ref VendorSQSQueueARN
-        - PolicyName: CloudWatchLogsPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-log-replicator:*'
+
 
   # Lambda Function
   LambdaFunction:
@@ -212,12 +197,7 @@ Resources:
                   logger.error(f"Unexpected error copying {source_key}: {str(e)}")
                   raise
 
-  # CloudWatch Log Group
-  LambdaLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-log-replicator'
-      RetentionInDays: !Ref LogRetentionDays
+
 
   # SQS Event Source Mapping
   SQSEventSourceMapping:
@@ -229,127 +209,11 @@ Resources:
       MaximumBatchingWindowInSeconds: 5
       Enabled: true
 
-  # CloudWatch Alarms
-  LambdaErrorAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub '${AWS::StackName}-lambda-errors'
-      AlarmDescription: 'Lambda function errors'
-      MetricName: Errors
-      Namespace: AWS/Lambda
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 2
-      Threshold: 1
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      Dimensions:
-        - Name: FunctionName
-          Value: !Sub '${AWS::StackName}-log-replicator'
-      AlarmActions:
-        - !Ref SNSTopic
 
-  LambdaDurationAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub '${AWS::StackName}-lambda-duration'
-      AlarmDescription: 'Lambda function duration approaching timeout'
-      MetricName: Duration
-      Namespace: AWS/Lambda
-      Statistic: Average
-      Period: 300
-      EvaluationPeriods: 2
-      Threshold: !If [IsProd, 240000, 180000]  # 80% of timeout
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      Dimensions:
-        - Name: FunctionName
-          Value: !Sub '${AWS::StackName}-log-replicator'
-      AlarmActions:
-        - !Ref SNSTopic
 
-  # SNS Topic for Alarms
-  SNSTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: !Sub '${AWS::StackName}-alarms'
-      DisplayName: !Sub '${AWS::StackName} CloudWatch Alarms'
 
-  # SNS Topic Policy
-  SNSTopicPolicy:
-    Type: AWS::SNS::TopicPolicy
-    Properties:
-      Topics:
-        - !Ref SNSTopic
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: cloudwatch.amazonaws.com
-            Action: sns:Publish
-            Resource: !Ref SNSTopic
 
-  # CloudWatch Dashboard
-  CloudWatchDashboard:
-    Type: AWS::CloudWatch::Dashboard
-    Properties:
-      DashboardName: !Sub '${AWS::StackName}-dashboard'
-      DashboardBody: !Sub |
-        {
-          "widgets": [
-            {
-              "type": "metric",
-              "x": 0,
-              "y": 0,
-              "width": 12,
-              "height": 6,
-              "properties": {
-                "metrics": [
-                  ["AWS/Lambda", "Invocations", "FunctionName", "${AWS::StackName}-log-replicator"],
-                  [".", "Errors", ".", "."],
-                  [".", "Throttles", ".", "."]
-                ],
-                "view": "timeSeries",
-                "stacked": false,
-                "region": "${AWS::Region}",
-                "title": "Lambda Function Metrics"
-              }
-            },
-            {
-              "type": "metric",
-              "x": 12,
-              "y": 0,
-              "width": 12,
-              "height": 6,
-              "properties": {
-                "metrics": [
-                  ["AWS/Lambda", "Duration", "FunctionName", "${AWS::StackName}-log-replicator"]
-                ],
-                "view": "timeSeries",
-                "stacked": false,
-                "region": "${AWS::Region}",
-                "title": "Lambda Function Duration"
-              }
-            },
-            {
-              "type": "metric",
-              "x": 0,
-              "y": 6,
-              "width": 12,
-              "height": 6,
-              "properties": {
-                "metrics": [
-                  ["AWS/SQS", "NumberOfMessagesReceived", "QueueName", "${VendorSQSQueueARN}"],
-                  [".", "NumberOfMessagesSent", ".", "."],
-                  [".", "NumberOfMessagesDeleted", ".", "."]
-                ],
-                "view": "timeSeries",
-                "stacked": false,
-                "region": "${AWS::Region}",
-                "title": "SQS Queue Metrics"
-              }
-            }
-          ]
-        }
+
 
 Outputs:
   LambdaFunctionName:
@@ -370,12 +234,4 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-lambda-execution-role-arn'
 
-  SNSTopicARN:
-    Description: 'ARN of the SNS topic for alarms'
-    Value: !Ref SNSTopic
-    Export:
-      Name: !Sub '${AWS::StackName}-sns-topic-arn'
-
-  CloudWatchDashboardURL:
-    Description: 'URL of the CloudWatch dashboard'
-    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${CloudWatchDashboard}' 
+ 
