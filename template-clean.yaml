@@ -1,0 +1,237 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'S3 Log Replicator - Cross-account log file replication from vendor S3 to destination S3'
+
+Parameters:
+  VendorSQSQueueARN:
+    Type: String
+    Description: 'ARN of the vendor SQS queue that receives S3 notifications'
+    AllowedPattern: '^arn:aws:sqs:[a-z0-9-]+:[0-9]{12}:[a-zA-Z0-9-_]+$'
+  
+  VendorS3BucketName:
+    Type: String
+    Description: 'Name of the vendor S3 bucket containing log files'
+    AllowedPattern: '^[a-z0-9][a-z0-9.-]*[a-z0-9]$'
+  
+  DestinationS3BucketName:
+    Type: String
+    Description: 'Name of the destination S3 bucket where logs will be copied'
+    AllowedPattern: '^[a-z0-9][a-z0-9.-]*[a-z0-9]$'
+  
+  LambdaTimeout:
+    Type: Number
+    Default: 300
+    Description: 'Lambda function timeout in seconds'
+    MinValue: 60
+    MaxValue: 900
+  
+  LambdaMemorySize:
+    Type: Number
+    Default: 512
+    Description: 'Lambda function memory size in MB'
+    AllowedValues: [128, 256, 512, 1024, 2048, 3008]
+  
+  Environment:
+    Type: String
+    Default: 'dev'
+    Description: 'Environment name (dev, staging, prod)'
+    AllowedValues: ['dev', 'staging', 'prod']
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, 'prod']
+
+Resources:
+  # Lambda Execution Role
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-lambda-execution-role'
+      AssumeRolePolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub 'arn:aws:s3:::${VendorS3BucketName}/*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                Resource: !Sub 'arn:aws:s3:::${DestinationS3BucketName}/*'
+        - PolicyName: CrossAccountSQSPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !Ref VendorSQSQueueARN
+
+
+  # Lambda Function
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-log-replicator'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: !Ref LambdaTimeout
+      MemorySize: !Ref LambdaMemorySize
+      Environment:
+        Variables:
+          DESTINATION_BUCKET: !Ref DestinationS3BucketName
+          VENDOR_BUCKET: !Ref VendorS3BucketName
+          VENDOR_SQS_QUEUE_URL: !Sub 'https://sqs.${AWS::Region}.amazonaws.com/${VendorSQSQueueARN}'
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          import logging
+          from botocore.exceptions import ClientError
+          
+          # Configure logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          
+          # Initialize AWS clients
+          s3_client = boto3.client('s3')
+          sqs_client = boto3.client('sqs')
+          
+          def lambda_handler(event, context):
+              """
+              Lambda handler to process SQS messages and copy S3 objects
+              """
+              logger.info(f"Processing {len(event.get('Records', []))} SQS messages")
+              
+              success_count = 0
+              error_count = 0
+              
+              for record in event.get('Records', []):
+                  try:
+                      # Parse SQS message body (S3 notification)
+                      message_body = json.loads(record['body'])
+                      
+                      # Handle S3 notification format
+                      if 'Records' in message_body:
+                          for s3_record in message_body['Records']:
+                              if s3_record.get('eventSource') == 'aws:s3':
+                                  bucket_name = s3_record['s3']['bucket']['name']
+                                  object_key = s3_record['s3']['object']['key']
+                                  
+                                  # Copy the object
+                                  copy_s3_object(bucket_name, object_key)
+                                  success_count += 1
+                      else:
+                          # Direct S3 event format
+                          bucket_name = message_body.get('bucket', {}).get('name')
+                          object_key = message_body.get('object', {}).get('key')
+                          
+                          if bucket_name and object_key:
+                              copy_s3_object(bucket_name, object_key)
+                              success_count += 1
+                          else:
+                              logger.warning(f"Unexpected message format: {message_body}")
+                              error_count += 1
+                              
+                  except Exception as e:
+                      logger.error(f"Error processing message: {str(e)}")
+                      error_count += 1
+                      continue
+              
+              logger.info(f"Processing complete. Success: {success_count}, Errors: {error_count}")
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({
+                      'success_count': success_count,
+                      'error_count': error_count
+                  })
+              }
+          
+          def copy_s3_object(source_bucket, source_key):
+              """
+              Copy an S3 object from source bucket to destination bucket
+              """
+              destination_bucket = os.environ['DESTINATION_BUCKET']
+              
+              try:
+                  logger.info(f"Copying s3://{source_bucket}/{source_key} to s3://{destination_bucket}/{source_key}")
+                  
+                  # Copy object
+                  copy_source = {
+                      'Bucket': source_bucket,
+                      'Key': source_key
+                  }
+                  
+                  s3_client.copy_object(
+                      CopySource=copy_source,
+                      Bucket=destination_bucket,
+                      Key=source_key,
+                      MetadataDirective='COPY'
+                  )
+                  
+                  logger.info(f"Successfully copied {source_key}")
+                  
+              except ClientError as e:
+                  error_code = e.response['Error']['Code']
+                  if error_code == 'NoSuchKey':
+                      logger.warning(f"Object {source_key} not found in source bucket")
+                  else:
+                      logger.error(f"Error copying {source_key}: {str(e)}")
+                      raise
+              except Exception as e:
+                  logger.error(f"Unexpected error copying {source_key}: {str(e)}")
+                  raise
+
+
+
+  # SQS Event Source Mapping
+  SQSEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      FunctionName: !Ref LambdaFunction
+      EventSourceArn: !Ref VendorSQSQueueARN
+      BatchSize: 10
+      MaximumBatchingWindowInSeconds: 5
+      Enabled: true
+
+
+
+
+
+
+
+Outputs:
+  LambdaFunctionName:
+    Description: 'Name of the Lambda function'
+    Value: !Ref LambdaFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-lambda-function-name'
+
+  LambdaFunctionARN:
+    Description: 'ARN of the Lambda function'
+    Value: !GetAtt LambdaFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-lambda-function-arn'
+
+  LambdaExecutionRoleARN:
+    Description: 'ARN of the Lambda execution role'
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-lambda-execution-role-arn'
+
+ 
