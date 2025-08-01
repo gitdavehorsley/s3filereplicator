@@ -1,4 +1,4 @@
-# S3 Log Replicator
+# S3 File Replicator
 
 A serverless, event-driven solution for cross-account S3 log file replication using AWS CloudFormation, Lambda, and SQS.
 
