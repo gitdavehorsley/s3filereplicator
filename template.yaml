@@ -35,6 +35,12 @@ Parameters:
     Default: 30
     Description: 'Number of days to retain CloudWatch logs'
     AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
+  
+  Environment:
+    Type: String
+    Default: 'dev'
+    Description: 'Environment name (dev, staging, prod)'
+    AllowedValues: ['dev', 'staging', 'prod']
 
 Conditions:
   IsProd: !Equals [!Ref Environment, 'prod']
